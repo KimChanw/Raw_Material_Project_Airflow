@@ -16,8 +16,8 @@ def _create_table(cur, schema, table):
     cur.execute(f'DROP TABLE IF EXISTS {schema}.{table}')
     create_table_sql = f"""
         CREATE TABLE IF NOT EXISTS {schema}.{table} (
-            time date NOT NULL,
-            price float NOT NULL
+            date DATE NOT NULL,
+            price FLOAT NOT NULL
         )
     """
     cur.execute(create_table_sql)
@@ -82,19 +82,25 @@ def transform_json_data_to_list(**context) -> List[list]:
     data_points = context['task_instance'].xcom_pull(task_ids=f'extract_{oil_type}_data')
     
     # 리스트에서 반복문을 돌려 각 날짜 별 딕셔너리에서 가격과 일자 정보를 추출함
+    # 결측치에 추가할 가장 최근 가격
+    latest_value = 0
     data_price_list = []
     for price_info in data_points:
-        # 가격 데이터 중 결측치가 "."으로 표현
-        # 실수 변환 과정에서 .을 float로 바꿀 경우 에러 발생
-        try:
-            # 문자열로 저장된 가격을 실수형으로 전환
-            value = float(price_info['value'])
-            data_price_list.append([price_info['date'], value])
+        # 문자열로 저장된 가격을 실수형으로 전환
+        value = price_info['value']
         
-        # 변환 오류가 발생하면 결측치 -> pass하여 결측치가 DW에 insert되지 않도록 방지
-        except Exception as e:
-            pass
-    
+        # 가격 데이터 중 결측치가 "."으로 표현
+        # 결측치는 가장 최근 유가로 설정하여 저장
+        if value == '.':
+            value = latest_value
+        
+        # 아니라면 실수로 변환
+        else:
+            value = float(value)
+        
+        data_price_list.append([price_info['date'], value])
+        latest_value = value
+
     logging.info('Transform done')
     logging.info(data_price_list)
     
@@ -110,9 +116,6 @@ def load_oil_price_list_to_dw(**context):
     
     schema = context['params']['schema']
     table = context['params']['table']
-    
-    # airflow에 저장한 redshift 접속 정보
-    cur = _get_redshift_connection()
     
     data_price_list = context['task_instance'].xcom_pull(task_ids=f'transform_{oil_type}_data')
     
@@ -134,7 +137,39 @@ def load_oil_price_list_to_dw(**context):
         raise
     
     logging.info('Full Refresh Done')
+
+def join_brent_and_wti_tables(**context):
+    """두 테이블을 조인하여 새로운 테이블을 생성하는 task"""
     
+    # join table을 생성하기 위한 스키마와 테이블 이름
+    schema = context['params']['schema']
+    ctas_table = context['params']['ctas_table']
+    
+    # 조인할 테이블과 조인 기준이 되는 필드 이름
+    left_table = context['params']['left_table']
+    right_table = context['params']['right_table']
+    join_column = context['params']['join_column']
+    
+    try:
+        cur.execute('BEGIN;')
+        # Full Refresh
+        cur.execute(f'DROP TABLE IF EXISTS {schema}.{ctas_table}')
+        logging.info("drop success")
+        join_sql = f"""
+        CREATE TABLE {schema}.{ctas_table} AS
+            SELECT l.date as date, l.price as wti, r.price as brent
+            FROM {left_table} l
+            JOIN {right_table} r ON l.{join_column} = r.{join_column};
+        """
+        cur.execute(join_sql)
+        cur.execute('COMMIT;')
+        
+    except:
+        cur.execute('ROLLBACK;')
+        raise
+    
+    logging.info('Join Tables Done')
+
 with DAG(
     dag_id='crude_oils_ETL_dag',
     start_date=datetime(2023,1,1),
@@ -142,6 +177,10 @@ with DAG(
     max_active_runs=1, # 해당 dag의 동시 실행 횟수는 1번으로 제한
     catchup=False,
 ) as dags:
+    
+    # airflow에 저장한 redshift 접속 정보
+    cur = _get_redshift_connection()
+    
     wti_price_extract_task = PythonOperator(
         task_id='extract_wti_data',
         python_callable=extract_oil_json_data_from_api,
@@ -193,11 +232,19 @@ with DAG(
         }
     )
     
-    dummy_task = EmptyOperator(
-        task_id='empty_task'
+    join_task = PythonOperator(
+        task_id='join_wti_and_brent',
+        python_callable=join_brent_and_wti_tables,
+        params={
+            'schema' : Variable.get('oil_schema'),
+            'ctas_table' : 'WtiBrentJoinTable',            
+            'left_table' : 'WtiPriceTable',
+            'right_table' : 'BrentPriceTable',
+            'join_column' : 'time'
+        }
     )
     
     wti_price_extract_task >> wti_price_transform_task >> wti_price_load_task
     brent_price_extract_task >> brent_price_transform_task >> brent_price_load_task
     
-    [wti_price_load_task, brent_price_load_task] >> dummy_task
+    [wti_price_load_task, brent_price_load_task] >> join_task
