@@ -240,7 +240,7 @@ with DAG(
             'ctas_table' : 'WtiBrentJoinTable',            
             'left_table' : 'WtiPriceTable',
             'right_table' : 'BrentPriceTable',
-            'join_column' : 'time'
+            'join_column' : 'date'
         }
     )
     
