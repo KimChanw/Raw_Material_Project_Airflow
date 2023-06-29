@@ -244,7 +244,7 @@ with DAG(
         task_id='join_wti_and_brent',
         python_callable=join_brent_and_wti_tables,
         params={
-            'schema' : Variable.get('oil_schema'),
+            'schema' : Variable.get('schema'),
             'ctas_table' : 'WtiBrentJoinTable',            
             'left_table' : 'WtiPriceTable',
             'right_table' : 'BrentPriceTable',
