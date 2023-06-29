@@ -27,6 +27,7 @@ def _create_table(cur, schema, table):
     except:
         cur.execute('ROLLBACK;')
         raise
+
     
 
 def _get_redshift_connection():
@@ -156,6 +157,7 @@ def join_brent_and_wti_tables(**context):
     right_table = context['params']['right_table']
     join_column = context['params']['join_column']
     
+
     try:
         cur.execute('BEGIN;')
         # Full Refresh
