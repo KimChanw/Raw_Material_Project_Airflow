@@ -12,19 +12,25 @@ from typing import List
 
 def _create_table(cur, schema, table):
     """Full Refresh를 위한 테이블 drop 후 생성"""
-    
-    cur.execute(f'DROP TABLE IF EXISTS {schema}.{table}')
-    create_table_sql = f"""
-        CREATE TABLE IF NOT EXISTS {schema}.{table} (
-            date DATE NOT NULL,
-            price FLOAT NOT NULL
-        )
-    """
-    cur.execute(create_table_sql)
+    try:
+        cur.execute('BEGIN;')
+        cur.execute(f'DROP TABLE IF EXISTS {schema}.{table}')
+        create_table_sql = f"""
+            CREATE TABLE IF NOT EXISTS {schema}.{table} (
+                date DATE NOT NULL,
+                price FLOAT NOT NULL
+            )
+        """
+        cur.execute(create_table_sql)
+        cur.execute('COMMIT;')
+        
+    except:
+        cur.execute('ROLLBACK;')
+        raise
     
 
 def _get_redshift_connection():
-    hook = PostgresHook(postgres_conn_id='redshift_oil_dev_db')
+    hook = PostgresHook(postgres_conn_id='redshift_dev_db')
     conn = hook.get_conn()
     return conn.cursor()
 
@@ -216,7 +222,7 @@ with DAG(
         task_id='load_wti_data',
         python_callable=load_oil_price_list_to_dw,
         params={
-            'schema' : Variable.get('oil_schema'),
+            'schema' : Variable.get('schema'),
             'table' : 'WtiPriceTable',
             'oil_type' : 'wti'
         }
@@ -226,7 +232,7 @@ with DAG(
         task_id='load_brent_data',
         python_callable=load_oil_price_list_to_dw,
         params={
-            'schema' : Variable.get('oil_schema'),
+            'schema' : Variable.get('schema'),
             'table' : 'BrentPriceTable',
             'oil_type' : 'brent'
         }
