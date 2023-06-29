@@ -181,7 +181,7 @@ def join_brent_and_wti_tables(**context):
 with DAG(
     dag_id='crude_oils_ETL_dag',
     start_date=datetime(2023,1,1),
-    schedule='0 12 * * *', # GST 기준 매일 오후 12시 update
+    schedule='0 12 * * *', # UTC 기준 매일 오후 12시 update
     max_active_runs=1, # 해당 dag의 동시 실행 횟수는 1번으로 제한
     catchup=False,
 ) as dags:
